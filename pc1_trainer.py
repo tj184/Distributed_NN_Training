@@ -2,40 +2,47 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import logging
 from torchvision import datasets, transforms
 from model_parts import ModelPart1
-from utils import send_tensor, receive_tensor
-from config import PC1_IP, PC2_IP, PORT_FORWARD, PORT_BACKWARD
+from send_utils import send_tensor, receive_tensor
+from config import PC2_IP, PORT_FORWARD, PORT_BACKWARD
 
-HOST = 'IP of PC2'   
-PORT_FORWARD = 5001  
-PORT_BACKWARD = 5002 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("PC1")
 
-model1 = ModelPart1()
-optimizer1 = optim.SGD(model1.parameters(), lr=0.01)
-criterion = nn.CrossEntropyLoss()
+def main():
+    device = torch.device("cpu")
+    model1 = ModelPart1().to(device)
+    optimizer = optim.SGD(model1.parameters(), lr=0.01, momentum=0.9)
+    criterion = nn.CrossEntropyLoss()
 
+    train_loader = torch.utils.data.DataLoader(
+        datasets.MNIST('./data', train=True, download=True,
+                       transform=transforms.ToTensor()),
+        batch_size=32, shuffle=True
+    )
 
-train_loader = torch.utils.data.DataLoader(
-    datasets.MNIST('.', train=True, download=True,
-                   transform=transforms.ToTensor()),
-    batch_size=32, shuffle=True
-)
+    for epoch in range(1):
+        for batch_idx, (data, target) in enumerate(train_loader):
+            data, target = data.to(device), target.to(device)
+            optimizer.zero_grad()
+            intermediate = model1(data)
 
-for epoch in range(1):
-    for batch_idx, (data, target) in enumerate(train_loader):
-        optimizer1.zero_grad()
+            try:
+                
+                send_tensor((intermediate.detach(), target), PC2_IP, PORT_FORWARD)
 
-       
-        act1 = model1(data)
+            
+                grad = receive_tensor(PORT_BACKWARD)
+                intermediate.backward(grad)
+                optimizer.step()
 
-        
-        send_tensor((act1.detach(), target), HOST, PORT_FORWARD)
+                if batch_idx % 100 == 0:
+                    logger.info(f"Epoch {epoch}, Batch {batch_idx} completed")
 
-        grad_act1 = receive_tensor(PORT_BACKWARD)
-        act1.backward(grad_act1)
+            except Exception as e:
+                logger.error(f"Communication failed: {e}")
 
-        optimizer1.step()
-
-        if batch_idx % 100 == 0:
-            print(f"PC1: Batch {batch_idx} completed.")
+if __name__ == "__main__":
+    main()
